@@ -583,7 +583,7 @@ function AppShell({ route, matchId, fixture }) {
           )}
         </ScrollView>
       </KeyboardAvoidingView>
-      {user && screen !== 'Settings' && screen !== 'Match detail' && (
+      {user && screen !== 'Settings' && (
         <View accessibilityRole="tablist" style={styles.bottomNav}>
           {navigation.map(item => (
             <Pressable
@@ -1578,8 +1578,8 @@ const styles = StyleSheet.create({
   headerSyncDot: { width: 6, height: 6, borderRadius: 3 },
   headerSyncText: { color: COLORS.greenDark, fontSize: 9, fontWeight: '800', textTransform: 'uppercase' },
   headerSettings: {
-    width: 44,
-    height: 44,
+    width: 48,
+    height: 48,
     borderRadius: 22,
     backgroundColor: '#F1F5F9',
     alignItems: 'center',
@@ -1588,7 +1588,7 @@ const styles = StyleSheet.create({
   headerSettingsText: { color: COLORS.muted, fontSize: 19, fontWeight: '900', lineHeight: 24 },
   identityRow: { minHeight: 29, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
   identityText: { color: COLORS.muted, fontSize: 10, flex: 1 },
-  pendingBadge: { minHeight: 28, justifyContent: 'center', paddingHorizontal: 9, backgroundColor: '#FFFBEB', borderRadius: 14, borderWidth: 1, borderColor: '#FDE68A' },
+  pendingBadge: { minHeight: 48, justifyContent: 'center', paddingHorizontal: 9, backgroundColor: '#FFFBEB', borderRadius: 14, borderWidth: 1, borderColor: '#FDE68A' },
   pendingBadgeText: { color: '#92400E', fontSize: 10, fontWeight: '800' },
   bottomNav: {
     flexDirection: 'row',
@@ -1663,10 +1663,10 @@ const styles = StyleSheet.create({
   telemetryText: { color: '#475569', fontSize: 10, fontWeight: '700', flexShrink: 1 },
   telemetryQueue: { color: '#334155', fontSize: 9, fontWeight: '800', backgroundColor: '#F1F5F9', paddingHorizontal: 7, paddingVertical: 5, borderRadius: 10 },
   fixtureHeading: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
-  refreshButton: { width: 44, height: 44, borderRadius: 13, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: COLORS.line, alignItems: 'center', justifyContent: 'center' },
+  refreshButton: { width: 48, height: 48, borderRadius: 13, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: COLORS.line, alignItems: 'center', justifyContent: 'center' },
   refreshButtonText: { color: COLORS.green, fontSize: 25, fontWeight: '700', lineHeight: 29 },
   filterRow: { gap: 8, paddingVertical: 2 },
-  filterChip: { minHeight: 42, flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 13, borderRadius: 22, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: COLORS.line },
+  filterChip: { minHeight: 48, flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 13, borderRadius: 24, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: COLORS.line },
   filterChipSelected: { backgroundColor: COLORS.green, borderColor: COLORS.green },
   filterChipText: { color: '#475569', fontSize: 12, fontWeight: '700', textTransform: 'capitalize' },
   filterChipTextSelected: { color: '#FFFFFF' },
