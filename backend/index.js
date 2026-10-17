@@ -44,7 +44,13 @@ app.post('/audit/v1/reset', async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
-// yahan baad mein naye routes add karna: sports, fixtures, leagues, events, score, standings, ...
+app.use('/audit/v1', require('./routes/sports'));
+app.use('/audit/v1', require('./routes/leagues'));
+app.use('/audit/v1', require('./routes/events'));
+
+app.use((req, res) => {
+  return fail(res, 404, 'NOT_FOUND', 'The requested route does not exist.');
+});
 
 app.use((err, req, res, next) => {
   if (err.type === 'entity.too.large')
