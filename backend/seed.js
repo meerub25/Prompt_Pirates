@@ -1,4 +1,5 @@
 const { pool } = require('./db');
+const { hashPassword } = require('./auth/password');
 
 const SPORTS = {
   football: {
@@ -50,6 +51,7 @@ async function seedBaseline(seed, stock) {
     await c.query('BEGIN');
     await c.query(`TRUNCATE TABLE
       order_items, orders, domain_events,
+      offline_actions, app_users, clubs,
       settings, sports, tenants, variants, leagues, matches, events
       RESTART IDENTITY CASCADE`);
     await c.query('ALTER SEQUENCE payment_id_seq RESTART WITH 1');
@@ -60,6 +62,117 @@ async function seedBaseline(seed, stock) {
     }
     await c.query(`INSERT INTO tenants(tenant_id, name) VALUES
       ('tenant-alpha', 'Alpha Sports'), ('tenant-beta', 'Beta Athletics')`);
+    const baselineLeagues = [
+      ['league-alpha-1', 'tenant-alpha'],
+      ['league-alpha-2', 'tenant-alpha'],
+      ['league-beta-1', 'tenant-beta']
+    ];
+    for (const [leagueId, tenantId] of baselineLeagues) {
+      await c.query(
+        `INSERT INTO leagues (league_id, config)
+         VALUES ($1, $2::jsonb)`,
+        [
+          leagueId,
+          JSON.stringify({
+            league_id: leagueId,
+            tenant_id: tenantId,
+            sport_id: 'football',
+            teams: [],
+            fixtures: [],
+            points: { win: 3, draw: 1, loss: 0 },
+            tie_break_order: SPORTS.football.tie_break_order,
+            qualification: { spots: 1 },
+            lots_seed: seed
+          })
+        ]
+      );
+    }
+    const clubs = [
+      {
+        club_id: 'club-alpha-1',
+        tenant_id: 'tenant-alpha',
+        name: 'Alpha United',
+        venue: { name: 'Alpha Sports Ground', address: 'Alpha City' },
+        roster: [{ player_id: 'player-alpha-1', name: 'Ali', position: 'player' }],
+        staff: [{ role: 'manager', name: 'Alpha Club Manager' }]
+      },
+      {
+        club_id: 'club-alpha-2',
+        tenant_id: 'tenant-alpha',
+        name: 'Alpha Athletic',
+        venue: { name: 'Alpha Athletic Arena', address: 'Alpha City' },
+        roster: [{ player_id: 'player-alpha-2', name: 'Bilal', position: 'player' }],
+        staff: [{ role: 'coach', name: 'Alpha Athletic Coach' }]
+      },
+      {
+        club_id: 'club-beta-1',
+        tenant_id: 'tenant-beta',
+        name: 'Beta Athletics',
+        venue: { name: 'Beta Sports Ground', address: 'Beta City' },
+        roster: [{ player_id: 'player-beta-1', name: 'Sara', position: 'player' }],
+        staff: [{ role: 'manager', name: 'Beta Club Manager' }]
+      }
+    ];
+    for (const club of clubs) {
+      await c.query(
+        `INSERT INTO clubs (club_id, tenant_id, name, home_venue, roster, staff)
+         VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6::jsonb)`,
+        [
+          club.club_id,
+          club.tenant_id,
+          club.name,
+          JSON.stringify(club.venue),
+          JSON.stringify(club.roster),
+          JSON.stringify(club.staff)
+        ]
+      );
+    }
+    const demoUsers = [
+      {
+        email: 'admin@nascon.test',
+        role: 'super_admin'
+      },
+      {
+        email: 'organizer@nascon.test',
+        role: 'league_organizer',
+        tenant_id: 'tenant-alpha',
+        own_league_id: 'league-alpha-1'
+      },
+      {
+        email: 'manager@nascon.test',
+        role: 'club_manager',
+        tenant_id: 'tenant-alpha',
+        own_club_id: 'club-alpha-1'
+      },
+      {
+        email: 'player@nascon.test',
+        role: 'player',
+        tenant_id: 'tenant-alpha',
+        own_club_id: 'club-alpha-1',
+        own_player_id: 'player-alpha-1'
+      },
+      {
+        email: 'viewer@nascon.test',
+        role: 'viewer',
+        tenant_id: 'tenant-alpha'
+      }
+    ];
+    for (const user of demoUsers) {
+      await c.query(
+        `INSERT INTO app_users
+          (email, password_hash, role, tenant_id, own_league_id, own_club_id, own_player_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [
+          user.email,
+          hashPassword(user.email, 'Nascon@26'),
+          user.role,
+          user.tenant_id || null,
+          user.own_league_id || null,
+          user.own_club_id || null,
+          user.own_player_id || null
+        ]
+      );
+    }
     for (const v of ['var-jersey-001-M', 'var-jersey-001-L']) {
       await c.query(
         `INSERT INTO variants(variant_id, product_id, tenant_id, price_minor, stock, reserved)

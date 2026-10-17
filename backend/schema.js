@@ -5,6 +5,30 @@ async function initSchema() {
     CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value JSONB);
     CREATE TABLE IF NOT EXISTS sports (sport_id TEXT PRIMARY KEY, config JSONB NOT NULL);
     CREATE TABLE IF NOT EXISTS tenants (tenant_id TEXT PRIMARY KEY, name TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS app_users (
+      email TEXT PRIMARY KEY,
+      password_hash TEXT NOT NULL,
+      role TEXT NOT NULL,
+      tenant_id TEXT,
+      own_league_id TEXT,
+      own_club_id TEXT,
+      own_player_id TEXT
+    );
+    CREATE TABLE IF NOT EXISTS clubs (
+      club_id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      home_venue JSONB NOT NULL,
+      roster JSONB NOT NULL DEFAULT '[]'::jsonb,
+      staff JSONB NOT NULL DEFAULT '[]'::jsonb
+    );
+    CREATE TABLE IF NOT EXISTS offline_actions (
+      device_id TEXT NOT NULL,
+      action_id TEXT NOT NULL,
+      request JSONB NOT NULL,
+      response JSONB NOT NULL,
+      PRIMARY KEY (device_id, action_id)
+    );
     CREATE TABLE IF NOT EXISTS variants (
       variant_id TEXT PRIMARY KEY, product_id TEXT, tenant_id TEXT,
       price_minor INT NOT NULL,

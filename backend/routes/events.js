@@ -8,6 +8,7 @@ const {
   validateEvent,
   validateScoreLimit
 } = require('../logic/scoring');
+const { loadScore } = require('../logic/score-reader');
 const { fail } = require('../util');
 
 const router = express.Router();
@@ -288,26 +289,11 @@ router.post('/events', async (req, res, next) => {
 
 router.get('/score/:match_id', async (req, res, next) => {
   try {
-    const matchResult = await pool.query(
-      'SELECT match_id, sport_id, league_id, home, away FROM matches WHERE match_id = $1',
-      [req.params.match_id]
-    );
-    if (matchResult.rowCount === 0) {
+    const score = await loadScore(req.params.match_id);
+    if (!score) {
       return fail(res, 404, 'MATCH_NOT_FOUND', 'The requested match does not exist.');
     }
-    const match = matchResult.rows[0];
-    const [sportResult, eventResult] = await Promise.all([
-      pool.query('SELECT config FROM sports WHERE sport_id = $1', [match.sport_id]),
-      pool.query(
-        `SELECT event_id, match_id, type, payload, signature, seq
-         FROM events WHERE match_id = $1 ORDER BY seq`,
-        [match.match_id]
-      )
-    ]);
-    if (sportResult.rowCount === 0) {
-      return fail(res, 404, 'SPORT_NOT_FOUND', 'The match sport does not exist.');
-    }
-    return res.json(projectScore(match, sportResult.rows[0].config, eventResult.rows));
+    return res.json(score);
   } catch (error) {
     return next(error);
   }
