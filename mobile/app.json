@@ -1,0 +1,40 @@
+{
+  "expo": {
+    "name": "NaSCon ’26",
+    "slug": "nascon-mobile",
+    "version": "1.0.0",
+    "orientation": "default",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#F5F7F5"
+    },
+    "ios": {
+      "supportsTablet": true
+    },
+    "android": {
+      "package": "com.nascon.companion",
+      "versionCode": 1,
+      "usesCleartextTraffic": true,
+      "permissions": [
+        "INTERNET",
+        "ACCESS_NETWORK_STATE"
+      ],
+      "adaptiveIcon": {
+        "backgroundColor": "#126B4A",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      }
+    },
+    "plugins": [
+      "expo-secure-store",
+      "expo-sqlite"
+    ],
+    "web": {
+      "favicon": "./assets/favicon.png"
+    }
+  }
+}
