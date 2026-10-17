@@ -47,6 +47,7 @@ app.post('/audit/v1/reset', async (req, res, next) => {
 app.use('/audit/v1', require('./routes/sports'));
 app.use('/audit/v1', require('./routes/leagues'));
 app.use('/audit/v1', require('./routes/events'));
+app.use('/audit/v1', require('./routes/store'));
 
 app.use((req, res) => {
   return fail(res, 404, 'NOT_FOUND', 'The requested route does not exist.');

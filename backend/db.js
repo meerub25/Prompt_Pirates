@@ -1,5 +1,8 @@
 const { Pool } = require('pg');
-const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  max: 30
+});
 
 async function waitForDb() {
   for (let i = 0; i < 60; i++) {

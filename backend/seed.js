@@ -48,7 +48,11 @@ async function seedBaseline(seed, stock) {
   const c = await pool.connect();
   try {
     await c.query('BEGIN');
-    await c.query('TRUNCATE settings, sports, tenants, variants, leagues, matches, events RESTART IDENTITY');
+    await c.query(`TRUNCATE TABLE
+      order_items, orders, domain_events,
+      settings, sports, tenants, variants, leagues, matches, events
+      RESTART IDENTITY CASCADE`);
+    await c.query('ALTER SEQUENCE payment_id_seq RESTART WITH 1');
     await c.query('INSERT INTO settings(key, value) VALUES ($1, $2)', ['lots_seed', JSON.stringify(seed)]);
     for (const [id, cfg] of Object.entries(SPORTS)) {
       await c.query('INSERT INTO sports(sport_id, config) VALUES ($1, $2)',
