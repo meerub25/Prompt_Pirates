@@ -1,9 +1,10 @@
 import { StatusBar } from 'expo-status-bar';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
+import { useFocusEffect, useRouter } from 'expo-router';
 import NetInfo from '@react-native-community/netinfo';
 import * as SecureStore from 'expo-secure-store';
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -27,7 +28,7 @@ import {
   getToken,
   saveToken,
   setBaseUrl
-} from './src/api';
+} from '../api';
 import {
   enqueueAction,
   getOrCreateDeviceId,
@@ -36,17 +37,17 @@ import {
   readSyncResults,
   removeQueuedActions,
   saveSyncResults
-} from './src/storage';
+} from '../storage';
 
 const COLORS = {
-  ink: '#17251F',
-  muted: '#64746C',
-  green: '#126B4A',
-  greenDark: '#0D5037',
-  greenPale: '#EAF5EF',
-  canvas: '#F5F7F5',
+  ink: '#0F172A',
+  muted: '#475569',
+  green: '#006C49',
+  greenDark: '#00422B',
+  greenPale: '#ECFDF5',
+  canvas: '#F8FAFC',
   paper: '#FFFFFF',
-  line: '#E0E8E2',
+  line: '#E2E8F0',
   gold: '#E9B44C',
   danger: '#A13C35',
   dangerPale: '#FFF0EE',
@@ -76,6 +77,8 @@ const ERROR_REASONS = {
   NOT_IN_SQUAD: 'That player is not in the selected squad.',
   ROSTER_RULE_VIOLATION: 'The roster change does not meet the league rules.'
 };
+
+let syncInFlight = false;
 
 function newId(prefix) {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
@@ -116,7 +119,11 @@ function Field({ label, value, onChangeText, placeholder, keyboardType, secureTe
         multiline={multiline}
         textAlignVertical={multiline ? 'top' : 'center'}
         style={[styles.input, multiline && styles.multilineInput]}
-        autoCapitalize={keyboardType === 'email-address' ? 'none' : 'sentences'}
+        autoCapitalize={
+          keyboardType === 'email-address' || keyboardType === 'url' || secureTextEntry
+            ? 'none'
+            : 'sentences'
+        }
       />
     </View>
   );
@@ -158,13 +165,11 @@ function Empty({ children }) {
   );
 }
 
-function App() {
+function AppShell({ route, matchId, fixture }) {
+  const router = useRouter();
   const [ready, setReady] = useState(false);
   const [token, setToken] = useState(null);
   const [user, setUser] = useState(null);
-  const [screen, setScreen] = useState('Login');
-  const [selectedMatch, setSelectedMatch] = useState(null);
-  const [returnScreen, setReturnScreen] = useState('Fixtures');
   const [online, setOnline] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [queue, setQueue] = useState([]);
@@ -172,7 +177,18 @@ function App() {
   const [baseUrl, setBaseUrlState] = useState('http://10.0.2.2:8080');
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
-  const syncLock = useRef(false);
+  const screen = ({
+    login: 'Login',
+    fixtures: 'Fixtures',
+    match: 'Match detail',
+    standings: 'Standings',
+    club: 'Club profile',
+    store: 'Store',
+    roster: 'Roster',
+    scoring: 'Scoring',
+    sync: 'Sync status',
+    settings: 'Settings'
+  })[route] || 'Login';
 
   const tenant = user?.tenant_id === 'tenant-beta'
     ? { name: 'Beta Athletics', color: '#286B9A' }
@@ -199,7 +215,6 @@ function App() {
           const parsed = JSON.parse(storedUser);
           setToken(storedToken);
           setUser(parsed);
-          setScreen('Fixtures');
         }
         await refreshQueue();
       } catch (loadError) {
@@ -211,6 +226,29 @@ function App() {
     return () => { active = false; };
   }, [refreshQueue]);
 
+  useFocusEffect(useCallback(() => {
+    refreshQueue().catch(loadError => setError(friendlyError(loadError)));
+  }, [refreshQueue]));
+
+  useEffect(() => {
+    if (!ready) return;
+    if (!user && !['Login', 'Settings'].includes(screen)) {
+      router.replace('/login');
+      return;
+    }
+    if (user && screen === 'Login') {
+      router.replace('/fixtures');
+      return;
+    }
+    if (screen === 'Roster' && user?.role !== 'club_manager') {
+      router.replace('/fixtures');
+      return;
+    }
+    if (screen === 'Scoring' && user?.role !== 'league_organizer') {
+      router.replace('/fixtures');
+    }
+  }, [ready, router, screen, user]);
+
   useEffect(() => {
     const unsubscribe = NetInfo.addEventListener(state => {
       setOnline(Boolean(state.isConnected && state.isInternetReachable !== false));
@@ -221,30 +259,30 @@ function App() {
   useEffect(() => {
     const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
       if (screen === 'Settings') {
-        setScreen(user ? returnScreen : 'Login');
+        router.back();
         return true;
       }
       if (screen === 'Match detail') {
-        setScreen('Fixtures');
+        router.back();
         return true;
       }
       if (user && screen !== 'Fixtures') {
-        setScreen('Fixtures');
+        router.replace('/fixtures');
         return true;
       }
       return false;
     });
     return () => subscription.remove();
-  }, [returnScreen, screen, user]);
+  }, [router, screen, user]);
 
   const syncPending = useCallback(async () => {
-    if (!online || !token || syncLock.current) return;
+    if (!online || !token || syncInFlight) return;
     const pending = await readQueue();
     if (pending.length === 0) {
       await refreshQueue();
       return;
     }
-    syncLock.current = true;
+    syncInFlight = true;
     setSyncing(true);
     setError('');
     try {
@@ -279,18 +317,18 @@ function App() {
       setError(friendlyError(syncError));
       await refreshQueue();
     } finally {
-      syncLock.current = false;
+      syncInFlight = false;
       setSyncing(false);
     }
   }, [online, token, refreshQueue]);
 
-  useEffect(() => {
+  useFocusEffect(useCallback(() => {
     if (online && token && queue.length > 0 && !syncing) {
       const timeout = setTimeout(() => { syncPending(); }, 350);
       return () => clearTimeout(timeout);
     }
     return undefined;
-  }, [online, token, queue.length, syncing, syncPending]);
+  }, [online, token, queue.length, syncing, syncPending]));
 
   const enqueue = useCallback(async action => {
     await enqueueAction(action);
@@ -306,14 +344,13 @@ function App() {
     await SecureStore.deleteItemAsync('nascon_user');
     setToken(null);
     setUser(null);
-    setScreen('Login');
+    router.replace('/login');
     setNotice('You have signed out.');
-  }, []);
+  }, [router]);
 
   const openSettings = () => {
     setError('');
-    setReturnScreen(screen);
-    setScreen('Settings');
+    router.push('/settings');
   };
 
   if (!ready) {
@@ -326,83 +363,78 @@ function App() {
   }
 
   const navigation = [
-    'Fixtures',
-    'Standings',
-    'Club profile',
-    'Store',
-    ...(user?.role === 'club_manager' ? ['Roster'] : []),
-    ...(user?.role === 'league_organizer' ? ['Scoring'] : []),
-    'Sync status'
+    { label: 'Fixtures', shortLabel: 'Matches', icon: '●', path: '/fixtures' },
+    { label: 'Standings', shortLabel: 'Tables', icon: '▤', path: '/standings' },
+    { label: 'Club profile', shortLabel: 'Club', icon: '⌂', path: '/club' },
+    { label: 'Store', shortLabel: 'Store', icon: '▣', path: '/store' },
+    ...(user?.role === 'club_manager'
+      ? [{ label: 'Roster', shortLabel: 'Roster', icon: '⇄', path: '/roster' }]
+      : []),
+    ...(user?.role === 'league_organizer'
+      ? [{ label: 'Scoring', shortLabel: 'Scoring', icon: '＋', path: '/scoring' }]
+      : []),
+    { label: 'Sync status', shortLabel: 'Sync', icon: '↻', path: '/sync' }
   ];
 
   return (
     <SafeAreaView style={styles.safeArea}>
-      <StatusBar style="light" />
-      <View style={[styles.topBand, { backgroundColor: tenant.color }]}>
+      <StatusBar style="dark" />
+      <View style={styles.topBand}>
         <View style={styles.brandRow}>
-          <View style={styles.brandMark}><Text style={styles.brandMarkText}>N</Text></View>
+          <View style={[styles.brandMark, { backgroundColor: tenant.color }]}>
+            <Text style={styles.brandMarkText}>N</Text>
+          </View>
           <View style={styles.brandCopy}>
-            <Text style={styles.brandTitle}>NaSCon ’26</Text>
-            <Text numberOfLines={1} style={styles.brandSubtitle}>{tenant.name}</Text>
+            <View style={styles.brandTitleRow}>
+              <Text numberOfLines={1} style={styles.brandTitle}>
+                {screen === 'Fixtures' ? 'Live Fixtures' : screen}
+              </Text>
+              <Text style={styles.yearBadge}>’26</Text>
+            </View>
+            <View style={styles.brandMetaRow}>
+              <Text numberOfLines={1} style={styles.tenantBadge}>{tenant.name}</Text>
+              <View style={styles.headerSyncBadge}>
+                <View style={[
+                  styles.headerSyncDot,
+                  { backgroundColor: syncing ? COLORS.gold : online ? '#10B981' : '#94A3B8' }
+                ]} />
+                <Text style={styles.headerSyncText}>
+                  {syncing ? 'Syncing' : online ? 'Online' : 'Offline'}
+                </Text>
+              </View>
+            </View>
           </View>
-          <View
-            accessibilityRole="text"
-            accessibilityLabel={syncing ? 'Syncing' : online ? 'Online' : 'Offline'}
-            style={styles.connectionPill}
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Open server settings"
+            onPress={openSettings}
+            style={styles.headerSettings}
           >
-            <View style={[
-              styles.connectionDot,
-              { backgroundColor: syncing ? COLORS.gold : online ? '#75D4A7' : '#F0A19A' }
-            ]} />
-            <Text style={styles.connectionText}>
-              {syncing ? 'Syncing' : online ? 'Online' : 'Offline'}
-            </Text>
-            {queue.length > 0 && <Text style={styles.queueCount}>{queue.length}</Text>}
-          </View>
+            <Text style={styles.headerSettingsText}>•••</Text>
+          </Pressable>
         </View>
         {user ? (
           <View style={styles.identityRow}>
             <Text numberOfLines={1} style={styles.identityText}>
               {ROLE_LABELS[user.role] || user.role} · {user.email}
             </Text>
-            <Pressable onPress={openSettings} style={styles.headerAction}>
-              <Text style={styles.headerActionText}>Settings</Text>
-            </Pressable>
+            {queue.length > 0 && (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={`${queue.length} pending actions. Open sync status`}
+                onPress={() => router.replace('/sync')}
+                style={styles.pendingBadge}
+              >
+                <Text style={styles.pendingBadgeText}>{queue.length} pending</Text>
+              </Pressable>
+            )}
           </View>
         ) : (
           <View style={styles.identityRow}>
             <Text style={styles.identityText}>Competition companion</Text>
-            <Pressable onPress={openSettings} style={styles.headerAction}>
-              <Text style={styles.headerActionText}>Settings</Text>
-            </Pressable>
           </View>
         )}
       </View>
-
-      {user && screen !== 'Settings' && (
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.navRow}
-        >
-          {navigation.map(item => (
-            <Pressable
-              key={item}
-              accessibilityRole="tab"
-              accessibilityState={{ selected: screen === item }}
-              onPress={() => { setError(''); setNotice(''); setScreen(item); }}
-              style={[styles.navItem, screen === item && styles.navItemSelected]}
-            >
-              <Text style={[styles.navText, screen === item && styles.navTextSelected]}>
-                {item}{item === 'Sync status' && queue.length > 0 ? ` (${queue.length})` : ''}
-              </Text>
-            </Pressable>
-          ))}
-          <Pressable onPress={logout} style={[styles.navItem, styles.logoutNav]}>
-            <Text style={styles.navText}>Sign out</Text>
-          </Pressable>
-        </ScrollView>
-      )}
 
       <KeyboardAvoidingView
         style={styles.body}
@@ -447,7 +479,7 @@ function App() {
                     tenant_id: result.tenant_id
                   });
                   setError('');
-                  setScreen('Fixtures');
+                  router.replace('/fixtures');
                   setNotice(`Welcome, ${ROLE_LABELS[result.role] || 'NaSCon user'}.`);
                 } catch (saveError) {
                   setError(friendlyError(saveError));
@@ -461,10 +493,11 @@ function App() {
               initialUrl={baseUrl}
               onSaved={value => {
                 setBaseUrlState(value);
-                setScreen(user ? returnScreen : 'Login');
+                router.back();
                 setNotice('Server address saved on this device.');
               }}
-              onCancel={() => setScreen(user ? returnScreen : 'Login')}
+              onCancel={() => router.back()}
+              onLogout={logout}
               setError={setError}
             />
           )}
@@ -472,17 +505,28 @@ function App() {
             <FixturesScreen
               token={token}
               leagueId={user.own_league_id || 'league-alpha-1'}
-              onOpenMatch={match => { setSelectedMatch(match); setScreen('Match detail'); }}
+              pendingCount={queue.length}
+              onOpenMatch={match => router.push({
+                pathname: '/match/[match_id]',
+                params: {
+                  match_id: match.match_id,
+                  home: match.home,
+                  away: match.away,
+                  status: match.status,
+                  score_home: String(match.score?.home ?? 0),
+                  score_away: String(match.score?.away ?? 0)
+                }
+              })}
               setError={setError}
             />
           )}
-          {screen === 'Match detail' && user && selectedMatch && (
+          {screen === 'Match detail' && user && matchId && (
             <MatchDetailScreen
               token={token}
-              matchId={selectedMatch.match_id}
-              fixture={selectedMatch}
-              onBack={() => setScreen('Fixtures')}
-              onBuy={() => setScreen('Store')}
+              matchId={matchId}
+              fixture={fixture}
+              onBack={() => router.back()}
+              onBuy={() => router.push('/store')}
               setError={setError}
             />
           )}
@@ -534,11 +578,40 @@ function App() {
               sync={syncPending}
             />
           )}
-          {user && !navigation.includes(screen) && screen !== 'Match detail' && screen !== 'Settings' && (
+          {user && !navigation.some(item => item.label === screen) && screen !== 'Match detail' && screen !== 'Settings' && (
             <Empty>This area is not available for your account.</Empty>
           )}
         </ScrollView>
       </KeyboardAvoidingView>
+      {user && screen !== 'Settings' && screen !== 'Match detail' && (
+        <View accessibilityRole="tablist" style={styles.bottomNav}>
+          {navigation.map(item => (
+            <Pressable
+              key={item.path}
+              accessibilityRole="tab"
+              accessibilityLabel={item.label}
+              accessibilityState={{ selected: screen === item.label }}
+              onPress={() => { setError(''); setNotice(''); router.replace(item.path); }}
+              style={styles.bottomNavItem}
+            >
+              <Text style={[
+                styles.bottomNavIcon,
+                screen === item.label && styles.bottomNavIconSelected
+              ]}>{item.icon}</Text>
+              <Text
+                numberOfLines={1}
+                style={[
+                  styles.bottomNavText,
+                  screen === item.label && styles.bottomNavTextSelected
+                ]}
+              >
+                {item.shortLabel}{item.label === 'Sync status' && queue.length > 0 ? ` ${queue.length}` : ''}
+              </Text>
+              {screen === item.label && <View style={styles.bottomNavIndicator} />}
+            </Pressable>
+          ))}
+        </View>
+      )}
     </SafeAreaView>
   );
 }
@@ -581,7 +654,7 @@ function LoginScreen({ onLogin, setError }) {
   );
 }
 
-function SettingsScreen({ initialUrl, onSaved, onCancel, setError }) {
+function SettingsScreen({ initialUrl, onSaved, onCancel, onLogout, setError }) {
   const [value, setValue] = useState(initialUrl);
   const [saving, setSaving] = useState(false);
   return (
@@ -603,15 +676,17 @@ function SettingsScreen({ initialUrl, onSaved, onCancel, setError }) {
           }
         }} />
         <Button title="Back" secondary onPress={onCancel} />
+        <Button title="Sign out" danger onPress={onLogout} />
       </Card>
     </View>
   );
 }
 
-function FixturesScreen({ token, leagueId, onOpenMatch, setError }) {
+function FixturesScreen({ token, leagueId, pendingCount, onOpenMatch, setError }) {
   const [matches, setMatches] = useState([]);
   const [loading, setLoading] = useState(true);
   const [cached, setCached] = useState(false);
+  const [statusFilter, setStatusFilter] = useState('all');
   const load = useCallback(async () => {
     setLoading(true);
     try {
@@ -631,32 +706,159 @@ function FixturesScreen({ token, leagueId, onOpenMatch, setError }) {
     }
   }, [leagueId, token, setError]);
   useEffect(() => { load(); }, [load]);
+  const statuses = [...new Set(matches.map(match => String(match.status || 'upcoming').toLowerCase()))];
+  const filteredMatches = matches.filter(match => (
+    statusFilter === 'all' || String(match.status || 'upcoming').toLowerCase() === statusFilter
+  ));
+  const featuredMatch = filteredMatches.find(match => (
+    ['in_progress', 'live'].includes(String(match.status || '').toLowerCase())
+  )) || filteredMatches[0];
+  const otherMatches = featuredMatch
+    ? filteredMatches.filter(match => match.match_id !== featuredMatch.match_id)
+    : [];
   return (
     <View style={styles.screen}>
-      <SectionTitle eyebrow="League fixtures" title="Fixtures" subtitle={`League ${leagueId}`} />
+      <View style={styles.telemetryBanner}>
+        <View style={styles.telemetryLeft}>
+          <View style={[styles.telemetryDot, cached && styles.telemetryDotOffline]} />
+          <Text style={styles.telemetryText}>
+            {cached ? 'Saved fixtures · offline cache' : 'Fixtures · live API'}
+          </Text>
+        </View>
+        <Text style={styles.telemetryQueue}>SQLite · {pendingCount} pending</Text>
+      </View>
+      <View style={styles.fixtureHeading}>
+        <View style={styles.flexOne}>
+          <Text style={styles.eyebrow}>League {leagueId}</Text>
+          <Text style={styles.title}>Match centre</Text>
+        </View>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Refresh fixtures"
+          onPress={load}
+          style={styles.refreshButton}
+        >
+          <Text style={styles.refreshButtonText}>↻</Text>
+        </Pressable>
+      </View>
+      {statuses.length > 0 && (
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.filterRow}
+        >
+          {['all', ...statuses].map(status => (
+            <Pressable
+              key={status}
+              accessibilityRole="button"
+              accessibilityState={{ selected: statusFilter === status }}
+              onPress={() => setStatusFilter(status)}
+              style={[styles.filterChip, statusFilter === status && styles.filterChipSelected]}
+            >
+              <Text style={[styles.filterChipText, statusFilter === status && styles.filterChipTextSelected]}>
+                {status === 'all' ? 'All matches' : statusText(status)}
+              </Text>
+              {status !== 'all' && (
+                <Text style={[styles.filterCount, statusFilter === status && styles.filterCountSelected]}>
+                  {matches.filter(match => String(match.status || 'upcoming').toLowerCase() === status).length}
+                </Text>
+              )}
+            </Pressable>
+          ))}
+        </ScrollView>
+      )}
       {cached && <CacheNote />}
       {loading && <Loading label="Loading fixtures…" />}
       {!loading && matches.length === 0 && <Empty>No matches are scheduled for this league yet. Check back after fixtures are published.</Empty>}
-      {matches.map(match => (
+      {!loading && matches.length > 0 && filteredMatches.length === 0 && (
+        <Empty>There are no {statusText(statusFilter)} matches. Choose another status filter.</Empty>
+      )}
+      {featuredMatch && (
+        <Pressable
+          onPress={() => onOpenMatch(featuredMatch)}
+          accessibilityRole="button"
+          accessibilityLabel={`Open match ${featuredMatch.home} versus ${featuredMatch.away}`}
+          style={styles.matchPress}
+        >
+          <Card style={styles.featuredMatchCard}>
+            <View style={styles.featuredMatchHeader}>
+              <View style={styles.featuredLiveBadge}>
+                <View style={styles.featuredLiveDot} />
+                <Text style={styles.featuredLiveText}>
+                  {statusText(featuredMatch.status)}
+                </Text>
+              </View>
+              <Text numberOfLines={1} style={styles.matchId}>{featuredMatch.match_id}</Text>
+            </View>
+            <View style={styles.featuredTeamsRow}>
+              <View style={styles.featuredTeam}>
+                <View style={styles.teamEmblem}>
+                  <Text style={styles.teamEmblemText}>
+                    {String(featuredMatch.home || 'H').slice(0, 2).toUpperCase()}
+                  </Text>
+                </View>
+                <Text numberOfLines={2} style={styles.featuredTeamName}>{featuredMatch.home}</Text>
+              </View>
+              <View style={styles.featuredScoreBlock}>
+                <View style={styles.featuredScorePill}>
+                  <Text style={styles.featuredScore}>
+                    {featuredMatch.score?.home ?? 0}
+                  </Text>
+                  <Text style={styles.featuredScoreDivider}>:</Text>
+                  <Text style={styles.featuredScore}>
+                    {featuredMatch.score?.away ?? 0}
+                  </Text>
+                </View>
+                <Text style={styles.featuredTime}>
+                  {formatTime(featuredMatch.scheduled_at || featuredMatch.start_time || featuredMatch.time)}
+                </Text>
+              </View>
+              <View style={styles.featuredTeam}>
+                <View style={styles.teamEmblem}>
+                  <Text style={styles.teamEmblemText}>
+                    {String(featuredMatch.away || 'A').slice(0, 2).toUpperCase()}
+                  </Text>
+                </View>
+                <Text numberOfLines={2} style={styles.featuredTeamName}>{featuredMatch.away}</Text>
+              </View>
+            </View>
+            <View style={styles.featuredMatchFooter}>
+              <Text style={styles.featuredFooterText}>Open match details</Text>
+              <Text style={styles.featuredArrow}>›</Text>
+            </View>
+          </Card>
+        </Pressable>
+      )}
+      {otherMatches.length > 0 && (
+        <View style={styles.fixtureList}>
+          <View style={styles.rowBetween}>
+            <Text style={styles.sectionHeading}>Other fixtures</Text>
+            <Text style={styles.fixtureCount}>{otherMatches.length} matches</Text>
+          </View>
+        </View>
+      )}
+      {otherMatches.map(match => (
         <Pressable key={match.match_id} onPress={() => onOpenMatch(match)} accessibilityRole="button" style={styles.matchPress}>
-          <Card style={styles.matchCard}>
-            <View style={styles.matchMeta}>
-              <Text style={styles.matchId}>{match.match_id}</Text>
+          <Card style={styles.compactMatchCard}>
+            <View style={styles.compactMatchInfo}>
+              <View style={styles.compactMatchMeta}>
+                <Text numberOfLines={1} style={styles.matchId}>{match.match_id}</Text>
               <StatusPill value={match.status} />
+              </View>
+              <Text style={styles.compactMatchDate}>
+                {formatTime(match.scheduled_at || match.start_time || match.time)}
+              </Text>
             </View>
-            <View style={styles.scoreLine}>
-              <Text numberOfLines={1} style={styles.teamName}>{match.home}</Text>
+            <View style={styles.compactTeamsRow}>
+              <View style={styles.compactTeamNames}>
+                <Text numberOfLines={1} style={styles.teamName}>{match.home}</Text>
+                <Text numberOfLines={1} style={styles.teamName}>{match.away}</Text>
+              </View>
               <Text style={styles.score}>{match.score?.home ?? 0} – {match.score?.away ?? 0}</Text>
-              <Text numberOfLines={1} style={styles.teamNameRight}>{match.away}</Text>
             </View>
-            <Text style={styles.caption}>
-              {formatTime(match.scheduled_at || match.start_time || match.time)}
-            </Text>
-            <Text style={styles.caption}>Tap to open match details</Text>
           </Card>
         </Pressable>
       ))}
-      <Button title="Refresh fixtures" secondary onPress={load} />
     </View>
   );
 }
@@ -694,14 +896,14 @@ function MatchDetailScreen({ token, matchId, fixture, onBack, onBuy, setError })
       if (showSpinner) setLoading(false);
     }
   }, [fixture, matchId, token, setError]);
-  useEffect(() => {
+  useFocusEffect(useCallback(() => {
     load(true);
     apiRequest('/api/v1/products', { token })
       .then(response => setProducts(response.products || []))
       .catch(() => setProducts([]));
     const timer = setInterval(() => { load(false); }, 3000);
     return () => clearInterval(timer);
-  }, [load, token]);
+  }, [load, token]));
   return (
     <View style={styles.screen}>
       <Button title="‹  Fixtures" secondary small onPress={onBack} />
@@ -1100,43 +1302,54 @@ function ScoringScreen({ token, leagueId, online, enqueue, setError }) {
       }
     }
   }, [leagueId, matchId, token, setError]);
-  useEffect(() => { loadMatches(); }, [loadMatches]);
-  useEffect(() => {
+  useFocusEffect(useCallback(() => {
+    loadMatches();
+  }, [loadMatches]));
+  const loadScore = useCallback(async () => {
     if (!matchId) return;
     let active = true;
-    const load = async () => {
-      try {
-        const score = await apiRequest(`/api/v1/matches/${encodeURIComponent(matchId)}`, {
-          token,
-          cacheKey: `match:${matchId}`
-        });
-        if (active) {
-          setScoreData(score);
-          if (!teamId) setTeamId(score.home.team_id);
-        }
-      } catch (loadError) {
-        const cachedScore = await readCache(`match:${matchId}`);
-        const fixture = matches.find(item => item.match_id === matchId);
-        if (active && cachedScore) {
-          setScoreData(cachedScore);
-        } else if (active && fixture) {
-          setScoreData({
-            match_id: matchId,
-            status: fixture.status,
-            version: 0,
-            events: [],
-            home: { team_id: fixture.home, score: fixture.score?.home || 0 },
-            away: { team_id: fixture.away, score: fixture.score?.away || 0 }
-          });
-        } else if (active && online) {
-          setError(friendlyError(loadError));
-        }
+    try {
+      const score = await apiRequest(`/api/v1/matches/${encodeURIComponent(matchId)}`, {
+        token,
+        cacheKey: `match:${matchId}`
+      });
+      if (active) {
+        setScoreData(score);
+        if (!teamId) setTeamId(score.home.team_id);
       }
+    } catch (loadError) {
+      const cachedScore = await readCache(`match:${matchId}`);
+      const fixture = matches.find(item => item.match_id === matchId);
+      if (active && cachedScore) {
+        setScoreData(cachedScore);
+      } else if (active && fixture) {
+        setScoreData({
+          match_id: matchId,
+          status: fixture.status,
+          version: 0,
+          events: [],
+          home: { team_id: fixture.home, score: fixture.score?.home || 0 },
+          away: { team_id: fixture.away, score: fixture.score?.away || 0 }
+        });
+      } else if (active && online) {
+        setError(friendlyError(loadError));
+      }
+    }
+  }, [matchId, matches, online, teamId, token, setError]);
+  useFocusEffect(useCallback(() => {
+    if (!matchId) return undefined;
+    let active = true;
+    const load = async () => {
+      if (!active) return;
+      await loadScore();
     };
     load();
     const timer = setInterval(load, 3000);
-    return () => { active = false; clearInterval(timer); };
-  }, [matchId, matches, online, teamId, token, setError]);
+    return () => {
+      active = false;
+      clearInterval(timer);
+    };
+  }, [loadScore, matchId]));
   const addEvent = async (type, payload) => {
     if (!scoreData) return;
     const now = new Date().toISOString();
@@ -1306,37 +1519,108 @@ function Loading({ label }) {
 const styles = StyleSheet.create({
   safeArea: { flex: 1, backgroundColor: COLORS.canvas },
   loadingScreen: { flex: 1, backgroundColor: COLORS.canvas, alignItems: 'center', justifyContent: 'center', gap: 14 },
-  topBand: { paddingHorizontal: 16, paddingTop: 8, paddingBottom: 10 },
+  topBand: {
+    paddingHorizontal: 16,
+    paddingTop: 7,
+    paddingBottom: 5,
+    backgroundColor: '#FFFFFF',
+    borderBottomWidth: 1,
+    borderBottomColor: COLORS.line,
+    shadowColor: '#0F172A',
+    shadowOpacity: 0.035,
+    shadowRadius: 5,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 2
+  },
   brandRow: { minHeight: 54, flexDirection: 'row', alignItems: 'center' },
-  brandMark: { width: 40, height: 40, borderRadius: 13, backgroundColor: 'rgba(255,255,255,0.2)', alignItems: 'center', justifyContent: 'center' },
+  brandMark: { width: 38, height: 38, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
   brandMarkText: { color: '#FFFFFF', fontSize: 22, fontWeight: '900' },
-  brandCopy: { marginLeft: 10, flex: 1 },
-  brandTitle: { color: '#FFFFFF', fontSize: 18, fontWeight: '800' },
-  brandSubtitle: { color: '#E2F2E9', fontSize: 12, marginTop: 1 },
-  connectionPill: { minHeight: 36, borderRadius: 18, paddingHorizontal: 10, flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.18)', gap: 6 },
-  connectionDot: { width: 8, height: 8, borderRadius: 4 },
-  connectionText: { color: '#FFFFFF', fontSize: 12, fontWeight: '700' },
-  queueCount: { color: '#183629', backgroundColor: '#FFFFFF', overflow: 'hidden', borderRadius: 10, paddingHorizontal: 6, paddingVertical: 2, fontSize: 11, fontWeight: '800' },
-  identityRow: { minHeight: 36, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
-  identityText: { color: '#EAF5EF', fontSize: 12, flex: 1 },
-  headerAction: { minHeight: 48, minWidth: 68, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 9 },
-  headerActionText: { color: '#FFFFFF', fontWeight: '700', fontSize: 13 },
-  navRow: { paddingHorizontal: 12, paddingVertical: 8, gap: 6, backgroundColor: COLORS.paper, borderBottomWidth: 1, borderColor: COLORS.line },
-  navItem: { minHeight: 48, justifyContent: 'center', paddingHorizontal: 12, borderRadius: 13 },
-  navItemSelected: { backgroundColor: COLORS.greenPale },
-  navText: { color: COLORS.muted, fontSize: 13, fontWeight: '700' },
-  navTextSelected: { color: COLORS.greenDark },
-  logoutNav: { borderWidth: 1, borderColor: COLORS.line },
+  brandCopy: { marginLeft: 10, flex: 1, minWidth: 0 },
+  brandTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 7 },
+  brandTitle: { color: '#0F172A', fontSize: 17, fontWeight: '800', flexShrink: 1 },
+  yearBadge: {
+    color: COLORS.green,
+    backgroundColor: '#ECFDF5',
+    borderColor: '#A7F3D0',
+    borderWidth: 1,
+    overflow: 'hidden',
+    borderRadius: 5,
+    paddingHorizontal: 5,
+    paddingVertical: 1,
+    fontSize: 10,
+    fontWeight: '800'
+  },
+  brandMetaRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 3 },
+  tenantBadge: {
+    color: COLORS.muted,
+    backgroundColor: '#F1F5F9',
+    borderColor: COLORS.line,
+    borderWidth: 1,
+    borderRadius: 5,
+    overflow: 'hidden',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    fontSize: 10,
+    fontWeight: '700',
+    maxWidth: 115
+  },
+  headerSyncBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    borderRadius: 10,
+    backgroundColor: '#ECFDF5',
+    borderWidth: 1,
+    borderColor: '#A7F3D0',
+    paddingHorizontal: 6,
+    paddingVertical: 2
+  },
+  headerSyncDot: { width: 6, height: 6, borderRadius: 3 },
+  headerSyncText: { color: COLORS.greenDark, fontSize: 9, fontWeight: '800', textTransform: 'uppercase' },
+  headerSettings: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#F1F5F9',
+    alignItems: 'center',
+    justifyContent: 'center'
+  },
+  headerSettingsText: { color: COLORS.muted, fontSize: 19, fontWeight: '900', lineHeight: 24 },
+  identityRow: { minHeight: 29, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
+  identityText: { color: COLORS.muted, fontSize: 10, flex: 1 },
+  pendingBadge: { minHeight: 28, justifyContent: 'center', paddingHorizontal: 9, backgroundColor: '#FFFBEB', borderRadius: 14, borderWidth: 1, borderColor: '#FDE68A' },
+  pendingBadgeText: { color: '#92400E', fontSize: 10, fontWeight: '800' },
+  bottomNav: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    minHeight: 64,
+    paddingHorizontal: 3,
+    paddingBottom: 2,
+    backgroundColor: 'rgba(255,255,255,0.98)',
+    borderTopWidth: 1,
+    borderTopColor: COLORS.line,
+    shadowColor: '#0F172A',
+    shadowOpacity: 0.045,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: -2 },
+    elevation: 8
+  },
+  bottomNavItem: { flex: 1, minWidth: 0, minHeight: 58, alignItems: 'center', justifyContent: 'center', gap: 2, position: 'relative' },
+  bottomNavIcon: { color: '#64748B', fontSize: 20, lineHeight: 24, fontWeight: '700' },
+  bottomNavIconSelected: { color: COLORS.green },
+  bottomNavText: { color: '#64748B', fontSize: 9, fontWeight: '600', maxWidth: '100%' },
+  bottomNavTextSelected: { color: COLORS.green, fontWeight: '800' },
+  bottomNavIndicator: { position: 'absolute', bottom: 1, width: 20, height: 2, borderRadius: 1, backgroundColor: COLORS.green },
   body: { flex: 1 },
   scroll: { flex: 1 },
-  screenContent: { padding: 16, paddingBottom: 38, flexGrow: 1 },
+  screenContent: { padding: 14, paddingBottom: 22, flexGrow: 1 },
   screen: { width: '100%', maxWidth: 720, alignSelf: 'center', gap: 12 },
   sectionTitleWrap: { gap: 4, marginBottom: 4 },
   eyebrow: { color: COLORS.green, fontSize: 12, textTransform: 'uppercase', letterSpacing: 1, fontWeight: '800' },
   title: { color: COLORS.ink, fontSize: 28, lineHeight: 34, fontWeight: '800' },
   bodyText: { color: COLORS.muted, fontSize: 15, lineHeight: 22 },
   caption: { color: COLORS.muted, fontSize: 12, lineHeight: 18 },
-  card: { backgroundColor: COLORS.paper, borderColor: COLORS.line, borderWidth: 1, borderRadius: 18, padding: 16, shadowColor: '#17251F', shadowOpacity: 0.035, shadowRadius: 8, shadowOffset: { width: 0, height: 3 }, elevation: 1 },
+  card: { backgroundColor: COLORS.paper, borderColor: COLORS.line, borderWidth: 1, borderRadius: 14, padding: 14, shadowColor: '#0F172A', shadowOpacity: 0.035, shadowRadius: 8, shadowOffset: { width: 0, height: 3 }, elevation: 1 },
   formCard: { gap: 12 },
   fieldWrap: { gap: 6 },
   fieldLabel: { color: COLORS.ink, fontSize: 14, fontWeight: '700' },
@@ -1360,6 +1644,60 @@ const styles = StyleSheet.create({
   sectionHeading: { color: COLORS.ink, fontSize: 19, fontWeight: '800', marginTop: 8 },
   matchPress: { width: '100%' },
   matchCard: { gap: 13 },
+  telemetryBanner: {
+    minHeight: 42,
+    paddingHorizontal: 11,
+    paddingVertical: 8,
+    borderRadius: 12,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: COLORS.line,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 6
+  },
+  telemetryLeft: { flexDirection: 'row', alignItems: 'center', gap: 7, flex: 1, minWidth: 0 },
+  telemetryDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#10B981' },
+  telemetryDotOffline: { backgroundColor: '#94A3B8' },
+  telemetryText: { color: '#475569', fontSize: 10, fontWeight: '700', flexShrink: 1 },
+  telemetryQueue: { color: '#334155', fontSize: 9, fontWeight: '800', backgroundColor: '#F1F5F9', paddingHorizontal: 7, paddingVertical: 5, borderRadius: 10 },
+  fixtureHeading: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
+  refreshButton: { width: 44, height: 44, borderRadius: 13, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: COLORS.line, alignItems: 'center', justifyContent: 'center' },
+  refreshButtonText: { color: COLORS.green, fontSize: 25, fontWeight: '700', lineHeight: 29 },
+  filterRow: { gap: 8, paddingVertical: 2 },
+  filterChip: { minHeight: 42, flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 13, borderRadius: 22, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: COLORS.line },
+  filterChipSelected: { backgroundColor: COLORS.green, borderColor: COLORS.green },
+  filterChipText: { color: '#475569', fontSize: 12, fontWeight: '700', textTransform: 'capitalize' },
+  filterChipTextSelected: { color: '#FFFFFF' },
+  filterCount: { color: '#64748B', fontSize: 10, fontWeight: '800' },
+  filterCountSelected: { color: '#D1FAE5' },
+  featuredMatchCard: { padding: 0, overflow: 'hidden', borderRadius: 15 },
+  featuredMatchHeader: { minHeight: 47, paddingHorizontal: 13, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10, backgroundColor: '#F1F5F9', borderBottomWidth: 1, borderBottomColor: COLORS.line },
+  featuredLiveBadge: { flexDirection: 'row', alignItems: 'center', gap: 6, minHeight: 27, paddingHorizontal: 9, borderRadius: 14, backgroundColor: '#D1FAE5', borderWidth: 1, borderColor: '#A7F3D0' },
+  featuredLiveDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: COLORS.green },
+  featuredLiveText: { color: COLORS.greenDark, fontSize: 10, fontWeight: '800', textTransform: 'uppercase' },
+  featuredTeamsRow: { minHeight: 153, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 11, paddingVertical: 16, gap: 5 },
+  featuredTeam: { flex: 1, minWidth: 0, alignItems: 'center', gap: 7 },
+  teamEmblem: { width: 46, height: 46, borderRadius: 13, backgroundColor: '#F1F5F9', borderWidth: 1, borderColor: COLORS.line, alignItems: 'center', justifyContent: 'center' },
+  teamEmblemText: { color: COLORS.greenDark, fontSize: 13, fontWeight: '900', textTransform: 'uppercase' },
+  featuredTeamName: { color: COLORS.ink, fontSize: 12, fontWeight: '800', textAlign: 'center' },
+  featuredScoreBlock: { alignItems: 'center', gap: 7, paddingHorizontal: 3 },
+  featuredScorePill: { flexDirection: 'row', alignItems: 'center', gap: 9, paddingHorizontal: 11, paddingVertical: 7, borderRadius: 12, backgroundColor: '#F8FAFC', borderWidth: 1, borderColor: COLORS.line },
+  featuredScore: { color: COLORS.green, fontSize: 27, lineHeight: 32, fontWeight: '900', fontVariant: ['tabular-nums'] },
+  featuredScoreDivider: { color: '#94A3B8', fontSize: 22, fontWeight: '400' },
+  featuredTime: { color: '#64748B', fontSize: 9, textAlign: 'center' },
+  featuredMatchFooter: { minHeight: 42, paddingHorizontal: 13, borderTopWidth: 1, borderTopColor: COLORS.line, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  featuredFooterText: { color: COLORS.green, fontSize: 11, fontWeight: '800' },
+  featuredArrow: { color: COLORS.green, fontSize: 24, lineHeight: 26 },
+  fixtureList: { gap: 8, marginTop: 2 },
+  fixtureCount: { color: '#64748B', fontSize: 11, fontWeight: '700' },
+  compactMatchCard: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: 12 },
+  compactMatchInfo: { flex: 1, gap: 7 },
+  compactMatchMeta: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  compactMatchDate: { color: '#64748B', fontSize: 10 },
+  compactTeamsRow: { alignItems: 'flex-end', gap: 5 },
+  compactTeamNames: { alignItems: 'flex-end', gap: 3, maxWidth: 115 },
   matchMeta: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
   matchId: { fontSize: 12, color: COLORS.muted, fontWeight: '700', flex: 1 },
   scoreLine: { flexDirection: 'row', alignItems: 'center', gap: 7 },
@@ -1431,4 +1769,4 @@ const styles = StyleSheet.create({
   captionLogin: { marginTop: 8 }
 });
 
-export default App;
+export default AppShell;
