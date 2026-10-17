@@ -1,1 +1,5 @@
 node_modules
+.env
+mobile/android/build
+mobile/android/app/build
+mobile/android/.gradle
